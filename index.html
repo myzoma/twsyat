@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>فلترة سوق العملات - احترافي</title>
+  <style>
+    body {
+      background: #181a20;
+      color: #f1f1f1;
+      font-family: 'Cairo', Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 24px;
+      background: #23272f;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px #0006;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 32px;
+      color: #ffb300;
+    }
+    pre {
+      background: #22242a;
+      color: #b2ffb2;
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>فلترة سوق العملات (Binance)</h1>
+    <form id="filter-form" style="background:#23272f;padding:18px 18px 8px 18px;border-radius:14px;display:flex;flex-wrap:wrap;gap:18px 32px;align-items:center;justify-content:center;margin-bottom:18px;box-shadow:0 2px 12px #0003;">
+      <div>
+        <label style="color:#ffb300;font-size:15px;">القرب من المقاومة (&lt; %):</label><br>
+        <input type="number" id="filter-near-res" min="1" max="50" value="10" style="width:60px;padding:4px 6px;border-radius:6px;border:none;background:#181a20;color:#fff;">
+      </div>
+      <div>
+        <label style="color:#ffb300;font-size:15px;">حجم التداول الأدنى (USDT):</label><br>
+        <input type="number" id="filter-volume" min="0" step="1000" value="0" style="width:100px;padding:4px 6px;border-radius:6px;border:none;background:#181a20;color:#fff;">
+      </div>
+      <div>
+        <label style="color:#ffb300;font-size:15px;">درجة الثقة الأدنى:</label><br>
+        <select id="filter-confidence" style="padding:4px 8px;border-radius:6px;background:#181a20;color:#fff;">
+          <option value="1">★ فما فوق</option>
+          <option value="2">★★ فما فوق</option>
+          <option value="3">★★★ فما فوق</option>
+          <option value="4">★★★★ فما فوق</option>
+          <option value="5">★★★★★ فقط</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:#ffb300;font-size:15px;">RSI:</label><br>
+        <input type="checkbox" id="filter-rsi" checked style="accent-color:#ffb300;"> بين 30 و 70
+      </div>
+      <div>
+        <label style="color:#ffb300;font-size:15px;">MACD:</label><br>
+        <input type="checkbox" id="filter-macd" checked style="accent-color:#ffb300;"> MACD &gt; Signal
+      </div>
+      <button type="submit" style="background:#ffb300;color:#181a20;font-weight:bold;border:none;padding:7px 22px;border-radius:8px;font-size:15px;cursor:pointer;margin-top:18px;">تطبيق الفلترة</button>
+    </form>
+    <div style="display:flex;align-items:center;gap:18px;margin-bottom:18px;flex-wrap:wrap;justify-content:center;">
+      <button id="refresh-btn" style="background:#ffb300;color:#181a20;font-weight:bold;border:none;padding:8px 22px;border-radius:8px;font-size:16px;cursor:pointer;">تحديث الآن</button>
+      <label style="font-size:15px;color:#ffb300;display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="auto-refresh" checked style="accent-color:#ffb300;width:18px;height:18px;"> تحديث تلقائي كل دقيقة
+      </label>
+      <span id="refresh-timer" style="font-size:14px;color:#b2ffb2;"></span>
+      <button id="export-excel" style="background:#4caf50;color:#fff;font-weight:bold;border:none;padding:8px 18px;border-radius:8px;font-size:15px;cursor:pointer;">تصدير إلى Excel</button>
+      <button id="export-pdf" style="background:#2196f3;color:#fff;font-weight:bold;border:none;padding:8px 18px;border-radius:8px;font-size:15px;cursor:pointer;">تصدير إلى PDF</button>
+    </div>
+    <div id="data-output">
+      <p>جاري جلب أزواج العملات USDT من Binance...</p>
+    </div>
+    <div id="symbol-details"></div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    let refreshInterval = null;
+    let refreshCountdown = 60;
+    function startAutoRefresh() {
+      clearInterval(refreshInterval);
+      refreshCountdown = 60;
+      document.getElementById('refresh-timer').textContent = `تحديث بعد ${refreshCountdown} ثانية`;
+      refreshInterval = setInterval(() => {
+        refreshCountdown--;
+        document.getElementById('refresh-timer').textContent = `تحديث بعد ${refreshCountdown} ثانية`;
+        if (refreshCountdown <= 0) {
+          fetchUSDTMarkets();
+          refreshCountdown = 60;
+        }
+      }, 1000);
+    }
+    function stopAutoRefresh() {
+      clearInterval(refreshInterval);
+      document.getElementById('refresh-timer').textContent = '';
+    }
+    // متغيرات الفلترة
+    let filterSettings = {
+      nearRes: 10,
+      minVolume: 0,
+      minConfidence: 1,
+      rsi: true,
+      macd: true
+    };
+    let lastFiltered = [];
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('refresh-btn').onclick = () => {
+        fetchUSDTMarkets();
+        refreshCountdown = 60;
+        document.getElementById('refresh-timer').textContent = `تحديث بعد ${refreshCountdown} ثانية`;
+      };
+      document.getElementById('auto-refresh').onchange = (e) => {
+        if (e.target.checked) {
+          startAutoRefresh();
+        } else {
+          stopAutoRefresh();
+        }
+      };
+      document.getElementById('filter-form').onsubmit = e => {
+        e.preventDefault();
+        filterSettings.nearRes = parseFloat(document.getElementById('filter-near-res').value);
+        filterSettings.minVolume = parseFloat(document.getElementById('filter-volume').value);
+        filterSettings.minConfidence = parseInt(document.getElementById('filter-confidence').value);
+        filterSettings.rsi = document.getElementById('filter-rsi').checked;
+        filterSettings.macd = document.getElementById('filter-macd').checked;
+        fetchUSDTMarkets();
+      };
+      document.getElementById('export-excel').onclick = () => {
+        if (!lastFiltered.length) return alert('لا توجد بيانات للتصدير!');
+        const ws = XLSX.utils.json_to_sheet(lastFiltered.map(r => ({
+          "العملة": r.symbol,
+          "السعر": r.price,
+          "المقاومة": r.resistance,
+          "الهدف": r.target,
+          "وقف الخسارة": r.stopLoss,
+          "القرب من المقاومة": r.nearResistance,
+          "حجم التداول": r.volume,
+          "التغير اليومي": r.change,
+          "RSI": r.rsi,
+          "MACD": r.macd,
+          "درجة الثقة": r.confidence
+        })));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "توصيات");
+        XLSX.writeFile(wb, "crypto-signals.xlsx");
+      };
+      document.getElementById('export-pdf').onclick = () => {
+        if (!lastFiltered.length) return alert('لا توجد بيانات للتصدير!');
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({orientation: 'landscape'});
+        doc.setFont('Arial');
+        doc.setFontSize(10);
+        doc.text('توصيات العملات الرقمية', 10, 10);
+        let y = 18;
+        lastFiltered.forEach((r, i) => {
+          doc.text(`${i+1}. ${r.symbol} | السعر: ${r.price} | المقاومة: ${r.resistance} | الهدف: ${r.target.toFixed(4)} | وقف الخسارة: ${r.stopLoss.toFixed(4)} | القرب من المقاومة: ${r.nearResistance.toFixed(2)}% | حجم التداول: ${r.volume.toLocaleString()} | التغير اليومي: ${r.change.toFixed(2)}% | RSI: ${r.rsi.toFixed(1)} | MACD: ${r.macd.toFixed(3)}`, 10, y);
+          y += 8;
+          if (y > 190) { doc.addPage(); y = 10; }
+        });
+        doc.save('crypto-signals.pdf');
+      };
+      startAutoRefresh();
+    });
+
+    async function fetchUSDTMarkets() {
+      const output = document.getElementById('data-output');
+      output.innerHTML = '<p style="color:#ffb300">جاري تحميل شبكة العملات...</p>';
+      try {
+        const res = await fetch('https://api1.binance.com/api/v3/exchangeInfo');
+        const data = await res.json();
+        // استخراج أزواج USDT فقط
+        let usdtSymbols = data.symbols.filter(s => s.symbol.endsWith('USDT') && s.status === 'TRADING');
+        // نأخذ أول 100 عملة فقط لتسريع العمل
+        usdtSymbols = usdtSymbols.slice(0, 100);
+        output.innerHTML = '<p style="color:#ffb300">جاري جلب بيانات العملات وتحليلها...</p>';
+        // جلب بيانات 24 ساعة لكل عملة
+        const tickersRes = await fetch('https://api1.binance.com/api/v3/ticker/24hr');
+        const tickers = await tickersRes.json();
+        // فلترة tickers للأزواج المختارة فقط
+        const tickersMap = {};
+        tickers.forEach(t => { tickersMap[t.symbol] = t; });
+        // جلب بيانات الشموع اليومية لكل عملة (بشكل متسلسل لتقليل الضغط)
+        let results = [];
+        for (let s of usdtSymbols) {
+          const symbol = s.symbol;
+          const ticker = tickersMap[symbol];
+          if (!ticker) continue;
+          try {
+            const klinesRes = await fetch(`https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=60`);
+            const klines = await klinesRes.json();
+            const highs = klines.slice(-30).map(k => parseFloat(k[2]));
+            const closes = klines.map(k => parseFloat(k[4]));
+            const resistance = Math.max(...highs);
+            const price = parseFloat(ticker.lastPrice);
+            const nearResistance = ((resistance - price) / resistance * 100);
+            const volume = parseFloat(ticker.quoteVolume);
+            const change = parseFloat(ticker.priceChangePercent);
+            // الهدف: المقاومة +3%
+            const target = resistance * 1.03;
+            // وقف الخسارة: السعر -5%
+            const stopLoss = price * 0.95;
+            // درجة الثقة: بناءً على قرب المقاومة وحجم التداول والتغير
+            let confidence = 1;
+            if (nearResistance <= 5) confidence++;
+            if (volume > 10000000) confidence++;
+            if (change > 2) confidence++;
+            if (change > 5) confidence++;
+            // حساب RSI (14)
+            function calcRSI(closes, period = 14) {
+              let gains = 0, losses = 0;
+              for (let i = closes.length - period; i < closes.length - 1; i++) {
+                const diff = closes[i + 1] - closes[i];
+                if (diff > 0) gains += diff;
+                else losses -= diff;
+              }
+              const avgGain = gains / period;
+              const avgLoss = losses / period;
+              if (avgLoss === 0) return 100;
+              const rs = avgGain / avgLoss;
+              return 100 - (100 / (1 + rs));
+            }
+            const rsi = calcRSI(closes);
+            // حساب MACD (12,26,9)
+            function ema(arr, period) {
+              const k = 2 / (period + 1);
+              let emaArr = [arr[0]];
+              for (let i = 1; i < arr.length; i++) {
+                emaArr.push(arr[i] * k + emaArr[i - 1] * (1 - k));
+              }
+              return emaArr;
+            }
+            function calcMACD(closes) {
+              const ema12 = ema(closes, 12);
+              const ema26 = ema(closes, 26);
+              const macdLine = ema12.map((v, i) => v - ema26[i]);
+              const signalLine = ema(macdLine.slice(ema26.length - macdLine.length), 9);
+              const macd = macdLine[macdLine.length - 1];
+              const signal = signalLine[signalLine.length - 1];
+              return { macd, signal };
+            }
+            const { macd, signal } = calcMACD(closes);
+            results.push({
+              symbol,
+              price,
+              resistance,
+              nearResistance,
+              volume,
+              change,
+              target,
+              stopLoss,
+              confidence,
+              rsi,
+              macd,
+              macdSignal: signal,
+              sparkline: closes.slice(-30)
+            });
+          } catch (e) {
+            // تجاهل العملة إذا فشل الجلب
+          }
+        }
+        // فلترة العملات حسب الشروط
+        // حجم التداول الأعلى
+        const sortedByVolume = [...results].sort((a, b) => b.volume - a.volume);
+        const volumeThreshold = sortedByVolume[Math.floor(sortedByVolume.length/2)]?.volume || 0;
+        // فلترة حسب إعدادات المستخدم
+        const filtered = results.filter(r =>
+          r.nearResistance <= filterSettings.nearRes &&
+          r.change > 0 &&
+          r.volume >= Math.max(volumeThreshold, filterSettings.minVolume) &&
+          r.confidence >= filterSettings.minConfidence &&
+          (!filterSettings.rsi || (r.rsi >= 30 && r.rsi <= 70)) &&
+          (!filterSettings.macd || (r.macd > r.macdSignal))
+        );
+        // ترتيب حسب القرب من المقاومة ثم حجم التداول
+        filtered.sort((a, b) => a.nearResistance - b.nearResistance || b.volume - a.volume);
+        // نأخذ أفضل 50 فقط
+        const top50 = filtered.slice(0, 50);
+        if (top50.length === 0) {
+          output.innerHTML = '<p style="color:red">لا توجد عملات تنطبق عليها الشروط حالياً.</p>';
+          return;
+        }
+        // عرض النتائج في شبكة
+        output.innerHTML = `<div style='margin-bottom:18px;color:#ffb300'>أفضل 50 عملة تقترب من اختراق المقاومة مع زخم عالي (تحديث لحظي)</div>`;
+        output.innerHTML += `<div id='filtered-grid' style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px;">`
+          + top50.map(r => `
+            <div class='symbol-item' data-symbol='${r.symbol}' style="background:rgba(30,34,45,0.95);backdrop-filter:blur(2px);padding:22px 14px 14px 14px;border-radius:18px;text-align:center;cursor:pointer;box-shadow:0 4px 24px #0005,0 1.5px 0 #ffb30033 inset;transition:background 0.2s;position:relative;overflow:hidden;">
+              <div style='font-size:22px;font-weight:bold;color:#ffb300;margin-bottom:8px;letter-spacing:1px;'>${r.symbol}</div>
+              <div style='width:100%;height:36px;margin-bottom:8px;'>${renderSparkline(r.sparkline)}</div>
+              <div style='display:flex;justify-content:center;gap:8px;margin-bottom:8px;'>
+                <a href='https://www.binance.com/en/trade/${r.symbol}' target='_blank' title='Binance' style='color:#b2ffb2;text-decoration:none;font-size:18px;'>Binance</a>
+                <a href='https://www.tradingview.com/symbols/${r.symbol.replace('USDT','USDT')}/' target='_blank' title='TradingView' style='color:#00bcd4;text-decoration:none;font-size:18px;'>TradingView</a>
+              </div>
+              <div style='font-size:17px;margin-bottom:4px;'>السعر: <b style='color:#b2ffb2'>${r.price}</b></div>
+              <div style='font-size:15px;'>المقاومة: <b style='color:#ffb300'>${r.resistance}</b></div>
+              <div style='font-size:15px;'>الهدف: <b style='color:#4caf50'>${r.target.toFixed(4)}</b></div>
+              <div style='font-size:15px;'>وقف الخسارة: <b style='color:#f44336'>${r.stopLoss.toFixed(4)}</b></div>
+              <div style='font-size:15px;'>القرب من المقاومة: <b>${r.nearResistance.toFixed(2)}%</b></div>
+              <div style='font-size:15px;'>حجم التداول: <b>${r.volume.toLocaleString()} USDT</b></div>
+              <div style='font-size:15px;'>التغير اليومي: <b style='color:${r.change>=0?'#4caf50':'#f44336'}'>${r.change.toFixed(2)}%</b></div>
+              <div style='font-size:15px;'>RSI: <b style='color:${r.rsi>70?'#f44336':r.rsi<30?'#2196f3':'#ffb300'}'>${r.rsi.toFixed(1)}</b></div>
+              <div style='font-size:15px;'>MACD: <b style='color:${r.macd>r.macdSignal?'#4caf50':'#f44336'}'>${r.macd.toFixed(3)}</b> / <b style='color:#ffb300'>${r.macdSignal.toFixed(3)}</b></div>
+              <div style='font-size:15px;'>درجة الثقة: <span style='color:#ffb300;font-size:20px;'>${'★'.repeat(r.confidence)}${'☆'.repeat(5-r.confidence)}</span></div>
+              <button onclick="copyCardAsImage(this.parentNode)" style="margin-top:10px;background:#22242a;color:#ffb300;border:none;padding:7px 18px;border-radius:8px;font-size:15px;cursor:pointer;">نسخ التوصية كصورة</button>
+              <div style='position:absolute;bottom:8px;right:12px;font-size:11px;color:#888;'>* المقاومة = أعلى سعر آخر 30 يوم</div>
+            </div>
+          `).join('')
+          + '</div>';
+        // تفعيل تفاصيل العملة عند الضغط
+        const grid = document.getElementById('filtered-grid');
+        grid.addEventListener('click', function(e) {
+          const item = e.target.closest('.symbol-item');
+          if (item && !e.target.matches('button,a')) {
+            showSymbolDetails(item.dataset.symbol);
+          }
+        });
+        lastFiltered = top50;
+      } catch (e) {
+        output.innerHTML = '<p style="color:red">فشل في جلب البيانات: ' + e + '</p>';
+      }
+    }
+
+    async function showSymbolDetails(symbol) {
+      const details = document.getElementById('symbol-details');
+      details.innerHTML = `<p style='color:#ffb300'>تم الضغط على <b>${symbol}</b> - جاري جلب البيانات...</p>`;
+      try {
+        // جلب بيانات 24 ساعة
+        const tickerRes = await fetch(`https://api1.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
+        const ticker = await tickerRes.json();
+        // جلب بيانات الشموع اليومية
+        const klinesRes = await fetch(`https://api1.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=100`);
+        const klines = await klinesRes.json();
+        // حساب المقاومة (أعلى سعر آخر 30 يوم)
+        const last30Highs = klines.slice(-30).map(k => parseFloat(k[2]));
+        const resistance = Math.max(...last30Highs);
+        // السعر الحالي
+        const price = parseFloat(ticker.lastPrice);
+        // نسبة قرب السعر من المقاومة
+        const nearResistance = ((resistance - price) / resistance * 100).toFixed(2);
+        // حجم التداول اليومي
+        const volume = parseFloat(ticker.quoteVolume).toLocaleString();
+        // نسبة التغير اليومي
+        const change = parseFloat(ticker.priceChangePercent).toFixed(2);
+        // الهدف ووقف الخسارة ودرجة الثقة
+        const target = (resistance * 1.03).toFixed(4);
+        const stopLoss = (price * 0.95).toFixed(4);
+        let confidence = 1;
+        if (nearResistance <= 5) confidence++;
+        if (parseFloat(ticker.quoteVolume) > 10000000) confidence++;
+        if (parseFloat(change) > 2) confidence++;
+        if (parseFloat(change) > 5) confidence++;
+        // ملخص
+        details.innerHTML = `
+          <div style="background:#23272f;padding:20px;border-radius:12px;margin-top:24px;max-width:500px;box-shadow:0 2px 12px #0004;">
+            <h2 style='color:#ffb300;margin-bottom:10px;'>${symbol}</h2>
+            <div>السعر الحالي: <b style='color:#b2ffb2'>${price}</b></div>
+            <div>المقاومة (30 يوم): <b style='color:#ffb300'>${resistance}</b></div>
+            <div>الهدف: <b style='color:#4caf50'>${target}</b></div>
+            <div>وقف الخسارة: <b style='color:#f44336'>${stopLoss}</b></div>
+            <div>القرب من المقاومة: <b>${nearResistance}%</b></div>
+            <div>حجم التداول اليومي: <b>${volume} USDT</b></div>
+            <div>نسبة التغير اليومي: <b style='color:${change>=0?'#4caf50':'#f44336'}'>${change}%</b></div>
+            <div>درجة الثقة: <span style='color:#ffb300;font-size:18px;'>${'★'.repeat(confidence)}${'☆'.repeat(5-confidence)}</span></div>
+            <div style='margin-top:10px;font-size:13px;color:#aaa'>* المقاومة = أعلى سعر آخر 30 يوم</div>
+          </div>
+        `;
+      } catch (e) {
+        details.innerHTML = `<p style='color:red'>فشل في جلب بيانات ${symbol}: ${e}</p>`;
+      }
+    }
+    fetchUSDTMarkets();
+
+    // نسخ البطاقة كصورة
+    function copyCardAsImage(cardElem) {
+      html2canvas(cardElem, {backgroundColor: null}).then(canvas => {
+        canvas.toBlob(blob => {
+          if (navigator.clipboard && window.ClipboardItem) {
+            navigator.clipboard.write([
+              new window.ClipboardItem({ 'image/png': blob })
+            ]).then(() => {
+              alert('تم نسخ التوصية كصورة!');
+            }, () => {
+              alert('حدث خطأ أثناء النسخ.');
+            });
+          } else {
+            // fallback: فتح الصورة في نافذة جديدة
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
+          }
+        });
+      });
+    }
+
+    // رسم sparkline
+    function renderSparkline(data) {
+      if (!data || data.length === 0) return '';
+      const w = 100, h = 36, min = Math.min(...data), max = Math.max(...data);
+      const points = data.map((v, i) => {
+        const x = (i / (data.length - 1)) * w;
+        const y = h - ((v - min) / (max - min + 0.0001)) * (h - 6) - 3;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      return `<svg width='${w}' height='${h}'><polyline fill='none' stroke='#ffb300' stroke-width='2' points='${points}'/><circle cx='${w}' cy='${h - ((data[data.length-1] - min) / (max - min + 0.0001)) * (h - 6) - 3}' r='2.5' fill='#4caf50'/></svg>`;
+    }
+  </script>
+</body>
+</html>
