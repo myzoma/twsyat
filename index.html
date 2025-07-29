@@ -231,14 +231,24 @@
             }
             const rsi = calcRSI(closes);
             // حساب MACD (12,26,9)
-            function ema(arr, period) {
-              const k = 2 / (period + 1);
-              let emaArr = [arr[0]];
-              for (let i = 1; i < arr.length; i++) {
-                emaArr.push(arr[i] * k + emaArr[i - 1] * (1 - k));
-              }
-              return emaArr;
-            }
+           function sma(arr, period) {
+  return arr.slice(0, period).reduce((a, b) => a + b, 0) / period;
+}
+
+function ema(arr, period) {
+  const k = 2 / (period + 1);
+  const emaArr = [];
+
+  // أول EMA = SMA للفترة الأولى
+  emaArr[period - 1] = sma(arr.slice(0, period), period);
+
+  for (let i = period; i < arr.length; i++) {
+    emaArr[i] = arr[i] * k + emaArr[i - 1] * (1 - k);
+  }
+
+  return emaArr.slice(period - 1); // نحذف القيم الفارغة في البداية
+}
+
             function calcMACD(closes) {
               const ema12 = ema(closes, 12);
               const ema26 = ema(closes, 26);
